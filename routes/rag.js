@@ -28,8 +28,8 @@ const embeddings = new GoogleGenerativeAIEmbeddings({
 });
 
 const llm = new ChatGoogleGenerativeAI({
-  model: "gemini-3.5-flash",
-  modelName: "gemini-3.5-flash",
+  model: "gemini-flash-lite-latest",
+  modelName: "gemini-flash-lite-latest",
   temperature: 0,
 });
 
@@ -48,14 +48,14 @@ router.post('/ingest', upload.single('file'), async (req, res, next) => {
     }
 
     console.log('Sending PDF to Gemini for OCR extraction...');
-    
+
     // Convert buffer to base64 for Gemini
     const base64Pdf = req.file.buffer.toString("base64");
-    
+
     // Initialize standard Gemini client (not LangChain wrapper) for File API
     const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
     const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
-    
+
     const result = await model.generateContent([
       "Extract all text from this document verbatim. Do not summarize or add formatting. Just give me the raw text found in the document.",
       {
@@ -81,7 +81,7 @@ router.post('/ingest', upload.single('file'), async (req, res, next) => {
     const docs = await splitter.createDocuments([extractedText], [{ source: req.file.originalname }]);
 
     console.log(`Generated ${docs.length} chunks. Storing in Supabase...`);
-    
+
     // Store in Supabase using Langchain's integration
     await SupabaseVectorStore.fromDocuments(
       docs,
@@ -136,11 +136,11 @@ router.post('/chat', async (req, res, next) => {
     `);
 
     console.log(`Answering question: "${question}"...`);
-    
+
     // Retrieve documents
     const retrievedDocs = await retriever.invoke(question);
     const contextText = retrievedDocs.map(doc => doc.pageContent).join("\\n\\n");
-    
+
     // Format prompt and invoke model
     const promptValue = await prompt.invoke({ context: contextText, input: question });
     const response = await llm.invoke(promptValue);
@@ -161,14 +161,14 @@ router.post('/chat', async (req, res, next) => {
 router.delete('/clear', async (req, res, next) => {
   try {
     console.log('Clearing all documents from the knowledge base...');
-    
+
     // Delete all records from the documents table
     // Supabase requires a filter for deletes, so we use .not('id', 'is', null) to match all rows
     const { error } = await supabaseClient
       .from('documents')
       .delete()
       .not('id', 'is', null);
-      
+
     if (error) {
       throw error;
     }
