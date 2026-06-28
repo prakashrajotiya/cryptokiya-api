@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import { createClient as createRedisClient } from 'redis';
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from '@supabase/supabase-js';
@@ -14,6 +15,16 @@ dotenv.config();
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Initialize Redis Client
+const redisClient = createRedisClient({
+  url: process.env.REDIS_URL
+});
+redisClient.on('error', err => console.error('Redis Client Error', err));
+redisClient.on('connect', () => console.log('Redis Client Connected'));
+if (process.env.REDIS_URL) {
+  redisClient.connect().catch(console.error);
+}
 
 // Initialize Supabase Client
 const supabaseUrl = process.env.SUPABASE_URL || '';
@@ -112,6 +123,24 @@ router.post('/chat', async (req, res, next) => {
       return res.status(400).json({ error: 'Question is required in the request body.' });
     }
 
+    // Check if the response is already cached in Redis
+    let cachedResponse = null;
+    try {
+      if (redisClient.isReady) {
+        const cachedData = await redisClient.get(question);
+        if (cachedData) {
+          cachedResponse = JSON.parse(cachedData);
+        }
+      }
+    } catch (err) {
+      console.error('Redis get error:', err);
+    }
+
+    if (cachedResponse) {
+      console.log(`Serving from cache for question: "${question}"`);
+      return res.json(cachedResponse);
+    }
+
     // Initialize VectorStore from existing data
     const vectorStore = new SupabaseVectorStore(embeddings, {
       client: supabaseClient,
@@ -145,10 +174,21 @@ router.post('/chat', async (req, res, next) => {
     const promptValue = await prompt.invoke({ context: contextText, input: question });
     const response = await llm.invoke(promptValue);
 
-    res.json({
+    const responseData = {
       answer: response.content,
       context: retrievedDocs.map(doc => doc.pageContent),
-    });
+    };
+
+    // Cache the response in Redis (expire in 3600 seconds)
+    try {
+      if (redisClient.isReady) {
+        await redisClient.setEx(question, 3600, JSON.stringify(responseData));
+      }
+    } catch (err) {
+      console.error('Redis set error:', err);
+    }
+
+    res.json(responseData);
   } catch (error) {
     next(error);
   }
